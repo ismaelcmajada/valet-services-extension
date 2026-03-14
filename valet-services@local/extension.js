@@ -171,8 +171,9 @@ const ValetServicesIndicator = GObject.registerClass(
       this._settings = settings
       this._watchers = new Map()
       this._actionProcesses = new Set()
-      this._refreshQueued = false
       this._busy = false
+      this._destroyed = false
+      this._refreshSourceId = 0
 
       this._label = new St.Label({
         y_align: Clutter.ActorAlign.CENTER,
@@ -190,11 +191,13 @@ const ValetServicesIndicator = GObject.registerClass(
     // --- Debounced refresh: coalesces rapid D-Bus signals ---
 
     _queueRefresh() {
-      if (this._refreshQueued) return
+      if (this._destroyed || this._refreshSourceId) return
 
-      this._refreshQueued = true
-      GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
-        this._refreshQueued = false
+      this._refreshSourceId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+        this._refreshSourceId = 0
+
+        if (this._destroyed) return GLib.SOURCE_REMOVE
+
         this._refreshUI()
         return GLib.SOURCE_REMOVE
       })
@@ -214,8 +217,6 @@ const ValetServicesIndicator = GObject.registerClass(
         .get_strv("db-services")
         .map(normalizeUnitName)
         .filter(Boolean)
-      this._valetPath = this._settings.get_string("valet-path")
-
       this._allWatched = [
         ...new Set([
           ...this._valetServices,
@@ -438,9 +439,25 @@ const ValetServicesIndicator = GObject.registerClass(
       return ["/usr/bin/pkexec", "/usr/bin/systemctl", action, ...services]
     }
 
-    _valetCmd(...args) {
-      const path = this._valetPath || "/usr/local/bin/valet"
-      return [path, ...args]
+    _existingServices(services) {
+      return services.filter(
+        (service) => this._getState(service) !== "not-found",
+      )
+    }
+
+    _appendStartSteps(steps, services) {
+      for (const service of this._existingServices(services))
+        steps.push(this._systemctlCmd("start", service))
+    }
+
+    _appendStopSteps(steps, services) {
+      for (const service of this._existingServices(services))
+        steps.push(this._systemctlCmd("stop", service))
+    }
+
+    _appendRestartSteps(steps, services) {
+      for (const service of this._existingServices(services))
+        steps.push(this._systemctlCmd("restart", service))
     }
 
     _runSubprocess(argv) {
@@ -500,14 +517,28 @@ const ValetServicesIndicator = GObject.registerClass(
       this.menu.close()
 
       const dbService = this._resolveDbService()
+      const dnsStartService = this._resolveDnsServiceForStart()
+      const dnsRestoreService = this._resolveDnsServiceForRestore()
       const steps = []
 
       steps.push(this._pkexecWarmupCmd())
 
-      if (dbService && this._getState(dbService) !== "not-found")
-        steps.push(this._systemctlCmd("start", dbService))
+      // Si Valet usa valet-dns, evita dejar dnsmasq "normal" compitiendo
+      if (
+        dnsStartService &&
+        dnsRestoreService &&
+        dnsStartService !== dnsRestoreService &&
+        this._getState(dnsRestoreService) !== "not-found"
+      ) {
+        steps.push(this._systemctlCmd("stop", dnsRestoreService))
+      }
 
-      steps.push(this._valetCmd("start"))
+      if (dbService) steps.push(this._systemctlCmd("start", dbService))
+
+      if (dnsStartService)
+        steps.push(this._systemctlCmd("start", dnsStartService))
+
+      this._appendStartSteps(steps, this._valetServices)
 
       try {
         await this._runSequence(steps)
@@ -521,17 +552,29 @@ const ValetServicesIndicator = GObject.registerClass(
       this.menu.close()
 
       const dbService = this._resolveDbService()
+      const dnsStartService = this._resolveDnsServiceForStart()
       const dnsRestoreService = this._resolveDnsServiceForRestore()
       const steps = []
 
       steps.push(this._pkexecWarmupCmd())
-      steps.push(this._valetCmd("stop"))
 
-      if (dnsRestoreService)
+      // Primero servicios web de Valet
+      this._appendStopSteps(steps, this._valetServices)
+
+      // Luego DNS específico de Valet, si aplica
+      if (dnsStartService)
+        steps.push(this._systemctlCmd("stop", dnsStartService))
+
+      // Restaurar dnsmasq clásico si es distinto
+      if (
+        dnsRestoreService &&
+        dnsRestoreService !== dnsStartService &&
+        this._getState(dnsRestoreService) !== "not-found"
+      ) {
         steps.push(this._systemctlCmd("start", dnsRestoreService))
+      }
 
-      if (dbService && this._getState(dbService) !== "not-found")
-        steps.push(this._systemctlCmd("stop", dbService))
+      if (dbService) steps.push(this._systemctlCmd("stop", dbService))
 
       try {
         await this._runSequence(steps)
@@ -545,22 +588,44 @@ const ValetServicesIndicator = GObject.registerClass(
       this.menu.close()
 
       const dbService = this._resolveDbService()
+      const dnsStartService = this._resolveDnsServiceForStart()
       const dnsRestoreService = this._resolveDnsServiceForRestore()
       const steps = []
 
       steps.push(this._pkexecWarmupCmd())
-      steps.push(this._valetCmd("stop"))
 
-      if (dnsRestoreService)
+      // Parada
+      this._appendStopSteps(steps, this._valetServices)
+
+      if (dnsStartService)
+        steps.push(this._systemctlCmd("stop", dnsStartService))
+
+      if (
+        dnsRestoreService &&
+        dnsRestoreService !== dnsStartService &&
+        this._getState(dnsRestoreService) !== "not-found"
+      ) {
         steps.push(this._systemctlCmd("start", dnsRestoreService))
+      }
 
-      if (dbService && this._getState(dbService) !== "not-found")
-        steps.push(this._systemctlCmd("stop", dbService))
+      if (dbService) steps.push(this._systemctlCmd("stop", dbService))
 
-      if (dbService && this._getState(dbService) !== "not-found")
-        steps.push(this._systemctlCmd("start", dbService))
+      // Arranque
+      if (
+        dnsStartService &&
+        dnsRestoreService &&
+        dnsStartService !== dnsRestoreService &&
+        this._getState(dnsRestoreService) !== "not-found"
+      ) {
+        steps.push(this._systemctlCmd("stop", dnsRestoreService))
+      }
 
-      steps.push(this._valetCmd("start"))
+      if (dbService) steps.push(this._systemctlCmd("start", dbService))
+
+      if (dnsStartService)
+        steps.push(this._systemctlCmd("start", dnsStartService))
+
+      this._appendStartSteps(steps, this._valetServices)
 
       try {
         await this._runSequence(steps)
@@ -579,7 +644,10 @@ const ValetServicesIndicator = GObject.registerClass(
       if (!dbService) return
 
       try {
-        await this._runSequence([this._systemctlCmd("start", dbService)])
+        await this._runSequence([
+          this._pkexecWarmupCmd(),
+          this._systemctlCmd("start", dbService),
+        ])
       } catch (e) {
         logError(e, "Error arrancando la base de datos")
       }
@@ -593,7 +661,10 @@ const ValetServicesIndicator = GObject.registerClass(
       if (!dbService) return
 
       try {
-        await this._runSequence([this._systemctlCmd("stop", dbService)])
+        await this._runSequence([
+          this._pkexecWarmupCmd(),
+          this._systemctlCmd("stop", dbService),
+        ])
       } catch (e) {
         logError(e, "Error deteniendo la base de datos")
       }
@@ -607,7 +678,10 @@ const ValetServicesIndicator = GObject.registerClass(
       if (!dbService) return
 
       try {
-        await this._runSequence([this._systemctlCmd("restart", dbService)])
+        await this._runSequence([
+          this._pkexecWarmupCmd(),
+          this._systemctlCmd("restart", dbService),
+        ])
       } catch (e) {
         logError(e, "Error reiniciando la base de datos")
       }
@@ -622,10 +696,18 @@ const ValetServicesIndicator = GObject.registerClass(
     }
 
     destroy() {
+      this._destroyed = true
+
+      if (this._refreshSourceId) {
+        GLib.Source.remove(this._refreshSourceId)
+        this._refreshSourceId = 0
+      }
+
       if (this._settingsChangedId) {
         this._settings.disconnect(this._settingsChangedId)
         this._settingsChangedId = 0
       }
+
       this._destroyWatchers()
       super.destroy()
     }
