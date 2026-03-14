@@ -22,6 +22,7 @@ const PRETTY_NAMES = {
   mariadb: "MariaDB",
   nginx: "Nginx",
   dnsmasq: "dnsmasq",
+  "valet-dns": "Valet DNS",
 }
 
 function displayName(serviceName) {
@@ -89,12 +90,11 @@ class ServiceWatcher {
         if (this._destroyed) return
 
         try {
-          const result = _conn.call_finish(res)
+          const result = Gio.DBus.system.call_finish(res)
           const [path] = result.deepUnpack()
           this._objectPath = path
           this._connectProxy(path)
-        } catch (e) {
-          logError(e, `GetUnit falló para ${this.serviceName}`)
+        } catch (_e) {
           this._activeState = "not-found"
           this._onChanged()
         }
@@ -167,6 +167,7 @@ const ValetServicesIndicator = GObject.registerClass(
       this._watchers = new Map()
       this._actionProcesses = new Set()
       this._refreshQueued = false
+      this._busy = false
 
       this._label = new St.Label({
         y_align: Clutter.ActorAlign.CENTER,
@@ -202,6 +203,11 @@ const ValetServicesIndicator = GObject.registerClass(
 
       this._valetServices = this._settings.get_strv("valet-services")
       this._dbCandidates = this._settings.get_strv("db-services")
+      this._valetPath = this._settings.get_string("valet-path")
+
+      this._allWatched = [
+        ...new Set([...this._valetServices, ...this._dbCandidates]),
+      ]
 
       this._buildMenu()
       this._initWatchers()
@@ -209,6 +215,7 @@ const ValetServicesIndicator = GObject.registerClass(
     }
 
     _buildMenu() {
+      // Summary
       this._summaryItem = new PopupMenu.PopupMenuItem("Comprobando…", {
         reactive: false,
         can_focus: false,
@@ -216,10 +223,9 @@ const ValetServicesIndicator = GObject.registerClass(
       this.menu.addMenuItem(this._summaryItem)
       this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem())
 
+      // Per-service status lines
       this._serviceItems = new Map()
-      const allServices = [...this._valetServices, ...this._dbCandidates]
-
-      for (const service of allServices) {
+      for (const service of this._allWatched) {
         const item = new PopupMenu.PopupMenuItem(`${displayName(service)}: …`, {
           reactive: false,
           can_focus: false,
@@ -230,24 +236,63 @@ const ValetServicesIndicator = GObject.registerClass(
 
       this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem())
 
-      this.menu.addAction("Refrescar ahora", () => this._refreshAll())
-      this.menu.addAction("Iniciar stack Valet", () =>
-        this._runValetStackAction("start"),
+      // Dynamic actions section — rebuilt on every refresh
+      this._actionsSection = new PopupMenu.PopupMenuSection()
+      this.menu.addMenuItem(this._actionsSection)
+    }
+
+    _rebuildActions() {
+      this._actionsSection.removeAll()
+
+      if (this._busy) {
+        this._actionsSection.addAction("⏳ Ejecutando…", () => {})
+        return
+      }
+
+      this._actionsSection.addAction("Refrescar ahora", () =>
+        this._refreshAll(),
       )
-      this.menu.addAction("Detener stack Valet", () =>
-        this._runValetStackAction("stop"),
+
+      // Stack actions based on current state
+      const valetState = this._valetStackState()
+
+      if (["inactive", "failed", "unknown"].includes(valetState))
+        this._actionsSection.addAction("Iniciar stack Valet", () =>
+          this._startValetStack(),
+        )
+
+      if (
+        ["active", "partial", "activating", "deactivating"].includes(valetState)
       )
-      this.menu.addAction("Reiniciar stack Valet", () =>
-        this._runValetStackAction("restart"),
-      )
-      this.menu.addAction("Reiniciar base de datos", () =>
-        this._restartDatabase(),
-      )
+        this._actionsSection.addAction("Detener stack Valet", () =>
+          this._stopValetStack(),
+        )
+
+      if (["active", "partial"].includes(valetState))
+        this._actionsSection.addAction("Reiniciar stack Valet", () =>
+          this._restartValetStack(),
+        )
+
+      // DB actions
+      this._actionsSection.addMenuItem(new PopupMenu.PopupSeparatorMenuItem())
+      const dbState = this._databaseState()
+
+      if (["inactive", "failed", "unknown"].includes(dbState))
+        this._actionsSection.addAction("Iniciar BD", () =>
+          this._startDatabase(),
+        )
+
+      if (["active", "activating", "deactivating"].includes(dbState))
+        this._actionsSection.addAction("Parar BD", () => this._stopDatabase())
+
+      if (dbState === "active")
+        this._actionsSection.addAction("Reiniciar BD", () =>
+          this._restartDatabase(),
+        )
     }
 
     _initWatchers() {
-      const allServices = [...this._valetServices, ...this._dbCandidates]
-      for (const service of allServices) {
+      for (const service of this._allWatched) {
         const watcher = new ServiceWatcher(service, () => this._queueRefresh())
         this._watchers.set(service, watcher)
       }
@@ -267,6 +312,18 @@ const ValetServicesIndicator = GObject.registerClass(
       return this._dbCandidates[0] ?? null
     }
 
+    _resolveDnsService() {
+      const candidates = ["valet-dns.service", "dnsmasq.service"]
+      for (const candidate of candidates) {
+        if (
+          this._watchers.has(candidate) &&
+          this._getState(candidate) !== "not-found"
+        )
+          return candidate
+      }
+      return null
+    }
+
     _valetStackState() {
       const states = this._valetServices
         .map((s) => this._getState(s))
@@ -274,8 +331,8 @@ const ValetServicesIndicator = GObject.registerClass(
 
       if (states.length === 0) return "unknown"
       if (states.every((s) => s === "active")) return "active"
-      if (states.some((s) => s === "active")) return "partial"
       if (states.some((s) => s === "failed")) return "failed"
+      if (states.some((s) => s === "active")) return "partial"
       return "inactive"
     }
 
@@ -314,7 +371,7 @@ const ValetServicesIndicator = GObject.registerClass(
         `<span color="${vColor}">V${vDot}</span> <span color="${dColor}">DB${dDot}</span>`,
       )
 
-      // Summary line — distinguish failed vs inactive for DB
+      // Summary line
       const valetWord =
         valetState === "active"
           ? "activo"
@@ -330,8 +387,7 @@ const ValetServicesIndicator = GObject.registerClass(
       )
 
       // Per-service lines
-      const allServices = [...this._valetServices, ...this._dbCandidates]
-      for (const service of allServices) {
+      for (const service of this._allWatched) {
         const state = this._getState(service)
         const item = this._serviceItems.get(service)
         if (!item) continue
@@ -343,40 +399,165 @@ const ValetServicesIndicator = GObject.registerClass(
             `${displayName(service)}: ${prettifyState(state)}`,
           )
       }
+
+      // Rebuild action buttons to match current state
+      this._rebuildActions()
     }
 
     _refreshAll() {
       for (const watcher of this._watchers.values()) watcher.refresh()
     }
 
-    // --- Actions: single pkexec for multiple services ---
+    // --- Command helpers ---
 
-    _spawnPkexecSystemctlMulti(action, services) {
-      const existing = services.filter((s) => this._getState(s) !== "not-found")
-      if (existing.length === 0) return
+    _systemctlCmd(action, ...services) {
+      return ["pkexec", "systemctl", action, ...services]
+    }
+
+    _valetCmd(...args) {
+      const path = this._valetPath || "/usr/local/bin/valet"
+      return [path, ...args]
+    }
+
+    _runSubprocess(argv) {
+      return new Promise((resolve, reject) => {
+        try {
+          const proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE)
+          this._actionProcesses.add(proc)
+
+          proc.wait_check_async(null, (obj, res) => {
+            this._actionProcesses.delete(proc)
+            try {
+              if (obj.wait_check_finish(res)) resolve()
+              else reject(new Error(`Command failed: ${argv.join(" ")}`))
+            } catch (e) {
+              reject(e)
+            }
+          })
+        } catch (e) {
+          reject(e)
+        }
+      })
+    }
+
+    async _runSequence(steps) {
+      this._busy = true
+      this._rebuildActions()
 
       try {
-        const proc = Gio.Subprocess.new(
-          ["pkexec", "systemctl", action, ...existing],
-          Gio.SubprocessFlags.NONE,
-        )
-        this._actionProcesses.add(proc)
-        proc.wait_check_async(null, (_obj, _res) => {
-          this._actionProcesses.delete(proc)
-          this._refreshAll()
-        })
-      } catch (_e) {
+        for (const step of steps) await this._runSubprocess(step)
+      } finally {
+        this._busy = false
         this._refreshAll()
       }
     }
 
-    _runValetStackAction(action) {
-      this._spawnPkexecSystemctlMulti(action, this._valetServices)
+    // --- Stack orchestration ---
+
+    async _startValetStack() {
+      if (this._busy) return
+      const dbService = this._resolveDbService()
+      const dnsService = this._resolveDnsService()
+      const steps = []
+
+      if (dbService && this._getState(dbService) !== "not-found")
+        steps.push(this._systemctlCmd("start", dbService))
+
+      if (dnsService && this._getState(dnsService) !== "not-found")
+        steps.push(this._systemctlCmd("start", dnsService))
+
+      steps.push(this._valetCmd("start"))
+
+      try {
+        await this._runSequence(steps)
+      } catch (e) {
+        logError(e, "Error arrancando el stack Valet")
+      }
     }
 
-    _restartDatabase() {
+    async _stopValetStack() {
+      if (this._busy) return
       const dbService = this._resolveDbService()
-      if (dbService) this._spawnPkexecSystemctlMulti("restart", [dbService])
+      const dnsService = this._resolveDnsService()
+      const steps = []
+
+      steps.push(this._valetCmd("stop"))
+
+      // Restore DNS after valet stop
+      if (dnsService && this._getState(dnsService) !== "not-found")
+        steps.push(this._systemctlCmd("start", dnsService))
+
+      if (dbService && this._getState(dbService) !== "not-found")
+        steps.push(this._systemctlCmd("stop", dbService))
+
+      try {
+        await this._runSequence(steps)
+      } catch (e) {
+        logError(e, "Error deteniendo el stack Valet")
+      }
+    }
+
+    async _restartValetStack() {
+      if (this._busy) return
+      const dbService = this._resolveDbService()
+      const dnsService = this._resolveDnsService()
+      const steps = []
+
+      // Stop phase
+      steps.push(this._valetCmd("stop"))
+
+      if (dbService && this._getState(dbService) !== "not-found")
+        steps.push(this._systemctlCmd("restart", dbService))
+
+      // Start phase
+      if (dnsService && this._getState(dnsService) !== "not-found")
+        steps.push(this._systemctlCmd("start", dnsService))
+
+      steps.push(this._valetCmd("start"))
+
+      try {
+        await this._runSequence(steps)
+      } catch (e) {
+        logError(e, "Error reiniciando el stack Valet")
+      }
+    }
+
+    // --- Database actions ---
+
+    async _startDatabase() {
+      if (this._busy) return
+      const dbService = this._resolveDbService()
+      if (!dbService) return
+
+      try {
+        await this._runSequence([this._systemctlCmd("start", dbService)])
+      } catch (e) {
+        logError(e, "Error arrancando la base de datos")
+      }
+    }
+
+    async _stopDatabase() {
+      if (this._busy) return
+      const dbService = this._resolveDbService()
+      if (!dbService) return
+
+      try {
+        await this._runSequence([this._systemctlCmd("stop", dbService)])
+      } catch (e) {
+        logError(e, "Error deteniendo la base de datos")
+      }
+    }
+
+    async _restartDatabase() {
+      if (this._busy) return
+      const dbService = this._resolveDbService()
+      if (!dbService) return
+
+      try {
+        await this._runSequence([this._systemctlCmd("restart", dbService)])
+      } catch (e) {
+        logError(e, "Error reiniciando la base de datos")
+      }
     }
 
     // --- Cleanup ---
