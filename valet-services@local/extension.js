@@ -217,7 +217,12 @@ const ValetServicesIndicator = GObject.registerClass(
       this._valetPath = this._settings.get_string("valet-path")
 
       this._allWatched = [
-        ...new Set([...this._valetServices, ...this._dbCandidates]),
+        ...new Set([
+          ...this._valetServices,
+          ...this._dbCandidates,
+          "valet-dns.service",
+          "dnsmasq.service",
+        ]),
       ]
 
       this._buildMenu()
@@ -320,7 +325,7 @@ const ValetServicesIndicator = GObject.registerClass(
         const state = this._getState(candidate)
         if (state !== "not-found") return candidate
       }
-      return this._dbCandidates[0] ?? null
+      return null
     }
 
     _resolveDnsServiceForStart() {
