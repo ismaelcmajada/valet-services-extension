@@ -280,10 +280,6 @@ const ValetServicesIndicator = GObject.registerClass(
         return
       }
 
-      this._actionsSection.addAction("Refrescar ahora", () =>
-        this._refreshAll(),
-      )
-
       // Stack actions based on current state
       const valetState = this._valetStackState()
 
