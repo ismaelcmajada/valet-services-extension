@@ -430,8 +430,12 @@ const ValetServicesIndicator = GObject.registerClass(
 
     // --- Command helpers ---
 
+    _pkexecWarmupCmd() {
+      return ["/usr/bin/pkexec", "/usr/bin/true"]
+    }
+
     _systemctlCmd(action, ...services) {
-      return ["pkexec", "systemctl", action, ...services]
+      return ["/usr/bin/pkexec", "/usr/bin/systemctl", action, ...services]
     }
 
     _valetCmd(...args) {
@@ -442,14 +446,32 @@ const ValetServicesIndicator = GObject.registerClass(
     _runSubprocess(argv) {
       return new Promise((resolve, reject) => {
         try {
-          const proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE)
+          const proc = Gio.Subprocess.new(
+            argv,
+            Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+          )
+
           this._actionProcesses.add(proc)
 
-          proc.wait_check_async(null, (obj, res) => {
+          proc.communicate_utf8_async(null, null, (obj, res) => {
             this._actionProcesses.delete(proc)
+
             try {
-              if (obj.wait_check_finish(res)) resolve()
-              else reject(new Error(`Command failed: ${argv.join(" ")}`))
+              const [, stdout, stderr] = obj.communicate_utf8_finish(res)
+              const status = obj.get_exit_status()
+
+              if (obj.get_successful()) {
+                resolve({ stdout, stderr, status })
+                return
+              }
+
+              reject(
+                new Error(
+                  `Command failed (${status}): ${argv.join(" ")}\n` +
+                    `stdout:\n${stdout || "(vacío)"}\n` +
+                    `stderr:\n${stderr || "(vacío)"}`,
+                ),
+              )
             } catch (e) {
               reject(e)
             }
@@ -462,7 +484,6 @@ const ValetServicesIndicator = GObject.registerClass(
 
     async _runSequence(steps) {
       this._busy = true
-      this._rebuildActions()
 
       try {
         for (const step of steps) await this._runSubprocess(step)
@@ -476,14 +497,15 @@ const ValetServicesIndicator = GObject.registerClass(
 
     async _startValetStack() {
       if (this._busy) return
+      this.menu.close()
+
       const dbService = this._resolveDbService()
-      const dnsService = this._resolveDnsServiceForStart()
       const steps = []
+
+      steps.push(this._pkexecWarmupCmd())
 
       if (dbService && this._getState(dbService) !== "not-found")
         steps.push(this._systemctlCmd("start", dbService))
-
-      if (dnsService) steps.push(this._systemctlCmd("start", dnsService))
 
       steps.push(this._valetCmd("start"))
 
@@ -496,13 +518,15 @@ const ValetServicesIndicator = GObject.registerClass(
 
     async _stopValetStack() {
       if (this._busy) return
+      this.menu.close()
+
       const dbService = this._resolveDbService()
       const dnsRestoreService = this._resolveDnsServiceForRestore()
       const steps = []
 
+      steps.push(this._pkexecWarmupCmd())
       steps.push(this._valetCmd("stop"))
 
-      // Restore dnsmasq after valet stop
       if (dnsRestoreService)
         steps.push(this._systemctlCmd("start", dnsRestoreService))
 
@@ -518,13 +542,13 @@ const ValetServicesIndicator = GObject.registerClass(
 
     async _restartValetStack() {
       if (this._busy) return
+      this.menu.close()
 
       const dbService = this._resolveDbService()
-      const dnsService = this._resolveDnsServiceForStart()
       const dnsRestoreService = this._resolveDnsServiceForRestore()
       const steps = []
 
-      // Stop phase
+      steps.push(this._pkexecWarmupCmd())
       steps.push(this._valetCmd("stop"))
 
       if (dnsRestoreService)
@@ -533,11 +557,8 @@ const ValetServicesIndicator = GObject.registerClass(
       if (dbService && this._getState(dbService) !== "not-found")
         steps.push(this._systemctlCmd("stop", dbService))
 
-      // Start phase
       if (dbService && this._getState(dbService) !== "not-found")
         steps.push(this._systemctlCmd("start", dbService))
-
-      if (dnsService) steps.push(this._systemctlCmd("start", dnsService))
 
       steps.push(this._valetCmd("start"))
 
@@ -552,6 +573,8 @@ const ValetServicesIndicator = GObject.registerClass(
 
     async _startDatabase() {
       if (this._busy) return
+      this.menu.close()
+
       const dbService = this._resolveDbService()
       if (!dbService) return
 
@@ -564,6 +587,8 @@ const ValetServicesIndicator = GObject.registerClass(
 
     async _stopDatabase() {
       if (this._busy) return
+      this.menu.close()
+
       const dbService = this._resolveDbService()
       if (!dbService) return
 
@@ -576,6 +601,8 @@ const ValetServicesIndicator = GObject.registerClass(
 
     async _restartDatabase() {
       if (this._busy) return
+      this.menu.close()
+
       const dbService = this._resolveDbService()
       if (!dbService) return
 
