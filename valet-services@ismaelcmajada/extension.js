@@ -284,9 +284,9 @@ const ValetServicesIndicator = GObject.registerClass(
       // Per-service submenus
       this._serviceItems = new Map()
       for (const service of this._allWatched) {
-        const item = new PopupMenu.PopupSubMenuMenuItem(
-          `${displayName(service)}: …`,
-        )
+        const item = new PopupMenu.PopupSubMenuMenuItem("")
+        item.label.clutter_text.use_markup = true
+        item.add_style_class_name("valet-service-item")
         this._serviceItems.set(service, item)
         this.menu.addMenuItem(item)
       }
@@ -378,6 +378,38 @@ const ValetServicesIndicator = GObject.registerClass(
       }
     }
 
+    _stateIcon(state) {
+      switch (state) {
+        case "active":
+          return "🟢"
+        case "activating":
+          return "🟡"
+        case "deactivating":
+          return "🟡"
+        case "failed":
+          return "🔴"
+        case "inactive":
+          return "⚪"
+        default:
+          return "❔"
+      }
+    }
+
+    _bootShort(state) {
+      switch (state) {
+        case "enabled":
+          return "autoarranque"
+        case "disabled":
+          return "manual"
+        case "static":
+          return "estático"
+        case "masked":
+          return "bloqueado"
+        default:
+          return state || "desconocido"
+      }
+    }
+
     _resolveDbService() {
       for (const candidate of this._dbCandidates) {
         const state = this._getState(candidate)
@@ -465,13 +497,20 @@ const ValetServicesIndicator = GObject.registerClass(
         if (!item?.label) continue
 
         const enabledState = this._getEnabledState(service)
-        const enabledText = this._prettifyEnabledState(enabledState)
 
         if (state === "not-found") {
-          item.label.set_text(`${displayName(service)}: no instalado`)
+          item.label.clutter_text.set_markup(
+            `❔ <b>${displayName(service)}</b>\n` +
+              `<span alpha="60%">no instalado</span>`,
+          )
         } else {
-          item.label.set_text(
-            `${displayName(service)}: ${prettifyState(state)} · arranque: ${enabledText}`,
+          const stateIcon = this._stateIcon(state)
+          const stateText = prettifyState(state)
+          const bootText = this._bootShort(enabledState)
+
+          item.label.clutter_text.set_markup(
+            `${stateIcon} <b>${displayName(service)}</b>\n` +
+              `<span alpha="60%">${stateText} • ${bootText}</span>`,
           )
         }
 
