@@ -13,7 +13,6 @@ import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js"
 const COLOR_GREEN = "#73d216"
 const COLOR_YELLOW = "#f4a01b"
 const COLOR_RED = "#cc0000"
-const COLOR_GREY = "#888888"
 
 // --- Pretty names for known services ---
 const PRETTY_NAMES = {
@@ -23,6 +22,12 @@ const PRETTY_NAMES = {
   nginx: "Nginx",
   dnsmasq: "dnsmasq",
   "valet-dns": "Valet DNS",
+}
+
+function normalizeUnitName(name) {
+  const trimmed = name.trim()
+  if (!trimmed) return ""
+  return trimmed.endsWith(".service") ? trimmed : `${trimmed}.service`
 }
 
 function displayName(serviceName) {
@@ -90,7 +95,7 @@ class ServiceWatcher {
         if (this._destroyed) return
 
         try {
-          const result = Gio.DBus.system.call_finish(res)
+          const result = _conn.call_finish(res)
           const [path] = result.deepUnpack()
           this._objectPath = path
           this._connectProxy(path)
@@ -201,8 +206,14 @@ const ValetServicesIndicator = GObject.registerClass(
       this._destroyWatchers()
       this.menu.removeAll()
 
-      this._valetServices = this._settings.get_strv("valet-services")
-      this._dbCandidates = this._settings.get_strv("db-services")
+      this._valetServices = this._settings
+        .get_strv("valet-services")
+        .map(normalizeUnitName)
+        .filter(Boolean)
+      this._dbCandidates = this._settings
+        .get_strv("db-services")
+        .map(normalizeUnitName)
+        .filter(Boolean)
       this._valetPath = this._settings.get_string("valet-path")
 
       this._allWatched = [
@@ -312,14 +323,18 @@ const ValetServicesIndicator = GObject.registerClass(
       return this._dbCandidates[0] ?? null
     }
 
-    _resolveDnsService() {
+    _resolveDnsServiceForStart() {
       const candidates = ["valet-dns.service", "dnsmasq.service"]
       for (const candidate of candidates) {
-        if (
-          this._watchers.has(candidate) &&
-          this._getState(candidate) !== "not-found"
-        )
-          return candidate
+        if (this._getState(candidate) !== "not-found") return candidate
+      }
+      return null
+    }
+
+    _resolveDnsServiceForRestore() {
+      const candidates = ["dnsmasq.service"]
+      for (const candidate of candidates) {
+        if (this._getState(candidate) !== "not-found") return candidate
       }
       return null
     }
@@ -457,14 +472,13 @@ const ValetServicesIndicator = GObject.registerClass(
     async _startValetStack() {
       if (this._busy) return
       const dbService = this._resolveDbService()
-      const dnsService = this._resolveDnsService()
+      const dnsService = this._resolveDnsServiceForStart()
       const steps = []
 
       if (dbService && this._getState(dbService) !== "not-found")
         steps.push(this._systemctlCmd("start", dbService))
 
-      if (dnsService && this._getState(dnsService) !== "not-found")
-        steps.push(this._systemctlCmd("start", dnsService))
+      if (dnsService) steps.push(this._systemctlCmd("start", dnsService))
 
       steps.push(this._valetCmd("start"))
 
@@ -478,14 +492,14 @@ const ValetServicesIndicator = GObject.registerClass(
     async _stopValetStack() {
       if (this._busy) return
       const dbService = this._resolveDbService()
-      const dnsService = this._resolveDnsService()
+      const dnsRestoreService = this._resolveDnsServiceForRestore()
       const steps = []
 
       steps.push(this._valetCmd("stop"))
 
-      // Restore DNS after valet stop
-      if (dnsService && this._getState(dnsService) !== "not-found")
-        steps.push(this._systemctlCmd("start", dnsService))
+      // Restore dnsmasq after valet stop
+      if (dnsRestoreService)
+        steps.push(this._systemctlCmd("start", dnsRestoreService))
 
       if (dbService && this._getState(dbService) !== "not-found")
         steps.push(this._systemctlCmd("stop", dbService))
@@ -499,19 +513,26 @@ const ValetServicesIndicator = GObject.registerClass(
 
     async _restartValetStack() {
       if (this._busy) return
+
       const dbService = this._resolveDbService()
-      const dnsService = this._resolveDnsService()
+      const dnsService = this._resolveDnsServiceForStart()
+      const dnsRestoreService = this._resolveDnsServiceForRestore()
       const steps = []
 
       // Stop phase
       steps.push(this._valetCmd("stop"))
 
+      if (dnsRestoreService)
+        steps.push(this._systemctlCmd("start", dnsRestoreService))
+
       if (dbService && this._getState(dbService) !== "not-found")
-        steps.push(this._systemctlCmd("restart", dbService))
+        steps.push(this._systemctlCmd("stop", dbService))
 
       // Start phase
-      if (dnsService && this._getState(dnsService) !== "not-found")
-        steps.push(this._systemctlCmd("start", dnsService))
+      if (dbService && this._getState(dbService) !== "not-found")
+        steps.push(this._systemctlCmd("start", dbService))
+
+      if (dnsService) steps.push(this._systemctlCmd("start", dnsService))
 
       steps.push(this._valetCmd("start"))
 

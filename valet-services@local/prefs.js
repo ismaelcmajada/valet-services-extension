@@ -81,7 +81,7 @@ export default class ValetServicesPreferences extends ExtensionPreferences {
     page.add(pathGroup)
 
     const pathRow = new Adw.EntryRow({
-      title: "valet-path",
+      title: "Ruta al binario valet",
       text: settings.get_string("valet-path"),
     })
     pathGroup.add(pathRow)
@@ -99,7 +99,7 @@ export default class ValetServicesPreferences extends ExtensionPreferences {
 
       settings.set_strv("valet-services", parseBuf(valetEntry.get_buffer()))
       settings.set_strv("db-services", parseBuf(dbEntry.get_buffer()))
-      settings.set_string("valet-path", pathRow.text)
+      settings.set_string("valet-path", pathRow.text.trim())
     })
   }
 }
