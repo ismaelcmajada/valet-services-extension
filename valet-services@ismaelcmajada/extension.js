@@ -158,23 +158,41 @@ class ServiceWatcher {
       const activeValue = this._proxy.get_cached_property("ActiveState")
 
       const loadState = loadValue ? loadValue.unpack() : "unknown"
-      const enabledValue = this._proxy.get_cached_property("UnitFileState")
 
       if (loadState === "not-found") {
         this._activeState = "not-found"
         this._enabledState = "unknown"
-      } else if (activeValue) {
-        this._activeState = activeValue.unpack()
-        this._enabledState = enabledValue ? enabledValue.unpack() : "unknown"
-      } else {
-        this._activeState = "unknown"
-        this._enabledState = enabledValue ? enabledValue.unpack() : "unknown"
+        this._onChanged()
+        return
       }
+
+      this._activeState = activeValue ? activeValue.unpack() : "unknown"
     } catch (_e) {
       this._activeState = "unknown"
     }
 
-    this._onChanged()
+    Gio.DBus.system.call(
+      "org.freedesktop.systemd1",
+      "/org/freedesktop/systemd1",
+      "org.freedesktop.systemd1.Manager",
+      "GetUnitFileState",
+      new GLib.Variant("(s)", [this.serviceName]),
+      new GLib.VariantType("(s)"),
+      Gio.DBusCallFlags.NONE,
+      -1,
+      null,
+      (_conn, res) => {
+        try {
+          const result = _conn.call_finish(res)
+          const [state] = result.deepUnpack()
+          this._enabledState = state ?? "unknown"
+        } catch (_e) {
+          this._enabledState = "unknown"
+        }
+
+        this._onChanged()
+      },
+    )
   }
 }
 
@@ -500,7 +518,7 @@ const ValetServicesIndicator = GObject.registerClass(
         item.menu.addAction("Parar", () => this._stopService(service))
       }
 
-      if (["active", "partial"].includes(state)) {
+      if (state === "active") {
         item.menu.addAction("Reiniciar", () => this._restartService(service))
       }
 
@@ -642,7 +660,10 @@ const ValetServicesIndicator = GObject.registerClass(
         for (const step of steps) await this._runSubprocess(step)
       } finally {
         this._busy = false
-        this._refreshAll()
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+          this._refreshAll()
+          return GLib.SOURCE_REMOVE
+        })
       }
     }
 
