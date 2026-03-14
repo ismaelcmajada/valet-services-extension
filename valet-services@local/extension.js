@@ -513,7 +513,6 @@ const ValetServicesIndicator = GObject.registerClass(
 
     async _startValetStack() {
       if (this._busy) return
-      this.menu.close()
 
       const dbService = this._resolveDbService()
       const dnsService = this._resolveDnsService()
@@ -538,7 +537,6 @@ const ValetServicesIndicator = GObject.registerClass(
 
     async _stopValetStack() {
       if (this._busy) return
-      this.menu.close()
 
       const dbService = this._resolveDbService()
       const steps = []
@@ -560,7 +558,6 @@ const ValetServicesIndicator = GObject.registerClass(
 
     async _restartValetStack() {
       if (this._busy) return
-      this.menu.close()
 
       const dbService = this._resolveDbService()
       const dnsService = this._resolveDnsService()
@@ -585,7 +582,6 @@ const ValetServicesIndicator = GObject.registerClass(
 
     async _startDatabase() {
       if (this._busy) return
-      this.menu.close()
 
       const dbService = this._resolveDbService()
       if (!dbService) return
@@ -599,7 +595,6 @@ const ValetServicesIndicator = GObject.registerClass(
 
     async _stopDatabase() {
       if (this._busy) return
-      this.menu.close()
 
       const dbService = this._resolveDbService()
       if (!dbService) return
@@ -613,7 +608,6 @@ const ValetServicesIndicator = GObject.registerClass(
 
     async _restartDatabase() {
       if (this._busy) return
-      this.menu.close()
 
       const dbService = this._resolveDbService()
       if (!dbService) return
