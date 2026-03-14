@@ -84,7 +84,7 @@ class ServiceWatcher {
       "org.freedesktop.systemd1",
       "/org/freedesktop/systemd1",
       "org.freedesktop.systemd1.Manager",
-      "GetUnit",
+      "LoadUnit",
       new GLib.Variant("(s)", [this.serviceName]),
       new GLib.VariantType("(o)"),
       Gio.DBusCallFlags.NONE,
@@ -149,9 +149,18 @@ class ServiceWatcher {
     if (!this._proxy) return
 
     try {
-      const value = this._proxy.get_cached_property("ActiveState")
-      if (value) this._activeState = value.unpack()
-      else this._activeState = "unknown"
+      const loadValue = this._proxy.get_cached_property("LoadState")
+      const activeValue = this._proxy.get_cached_property("ActiveState")
+
+      const loadState = loadValue ? loadValue.unpack() : "unknown"
+
+      if (loadState === "not-found") {
+        this._activeState = "not-found"
+      } else if (activeValue) {
+        this._activeState = activeValue.unpack()
+      } else {
+        this._activeState = "unknown"
+      }
     } catch (_e) {
       this._activeState = "unknown"
     }
@@ -552,23 +561,14 @@ const ValetServicesIndicator = GObject.registerClass(
       const dnsService = this._resolveDnsService()
       const steps = []
 
-      const toStop = []
+      const toRestart = []
 
-      toStop.push(...this._existingServices(this._valetServices))
+      if (dbService) toRestart.push(dbService)
+      if (dnsService) toRestart.push(dnsService)
+      toRestart.push(...this._existingServices(this._valetServices))
 
-      if (dbService) toStop.push(dbService)
-
-      if (toStop.length) steps.push(this._systemctlCmd("stop", ...toStop))
-
-      const toStart = []
-
-      if (dbService) toStart.push(dbService)
-
-      if (dnsService) toStart.push(dnsService)
-
-      toStart.push(...this._existingServices(this._valetServices))
-
-      if (toStart.length) steps.push(this._systemctlCmd("start", ...toStart))
+      if (toRestart.length)
+        steps.push(this._systemctlCmd("restart", ...toRestart))
 
       try {
         await this._runSequence(steps)
@@ -576,7 +576,6 @@ const ValetServicesIndicator = GObject.registerClass(
         logError(e, "Error reiniciando el stack Valet")
       }
     }
-
     // --- Database actions ---
 
     async _startDatabase() {
