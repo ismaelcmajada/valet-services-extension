@@ -51,7 +51,7 @@ function prettifyState(activeState) {
   }
 }
 
-// --- ServiceWatcher: resolves path via GetUnit(), pure D-Bus signals ---
+// --- ServiceWatcher: resolves path via LoadUnit(), pure D-Bus signals ---
 
 class ServiceWatcher {
   constructor(serviceName, onChanged) {
@@ -192,6 +192,13 @@ const ValetServicesIndicator = GObject.registerClass(
       this._settingsChangedId = this._settings.connect("changed", () => {
         this._rebuildAll()
       })
+
+      this._menuOpenChangedId = this.menu.connect(
+        "open-state-changed",
+        (_menu, open) => {
+          if (!open) this._safeRebuildActions()
+        },
+      )
 
       this._rebuildAll()
     }
@@ -385,9 +392,11 @@ const ValetServicesIndicator = GObject.registerClass(
         valetState === "active" ? "●" : valetState === "partial" ? "◐" : "○"
       const dDot = dbState === "active" ? "●" : "○"
 
-      this._label.clutter_text.set_markup(
-        `<span color="${vColor}">V${vDot}</span> <span color="${dColor}">DB${dDot}</span>`,
-      )
+      if (this._label?.clutter_text) {
+        this._label.clutter_text.set_markup(
+          `<span color="${vColor}">V${vDot}</span> <span color="${dColor}">DB${dDot}</span>`,
+        )
+      }
 
       // Summary line
       const valetWord =
@@ -400,15 +409,17 @@ const ValetServicesIndicator = GObject.registerClass(
               : "inactivo"
       const dbWord = prettifyState(dbState)
       const dbName = dbService ? displayName(dbService) : "DB"
-      this._summaryItem.label.set_text(
-        `Valet: ${valetWord} · ${dbName}: ${dbWord}`,
-      )
+      if (this._summaryItem?.label) {
+        this._summaryItem.label.set_text(
+          `Valet: ${valetWord} · ${dbName}: ${dbWord}`,
+        )
+      }
 
       // Per-service lines
       for (const service of this._allWatched) {
         const state = this._getState(service)
         const item = this._serviceItems.get(service)
-        if (!item) continue
+        if (!item?.label) continue
 
         if (state === "not-found")
           item.label.set_text(`${displayName(service)}: no instalado`)
@@ -419,7 +430,17 @@ const ValetServicesIndicator = GObject.registerClass(
       }
 
       // Rebuild action buttons to match current state
-      this._rebuildActions()
+      if (!this.menu.isOpen) this._safeRebuildActions()
+    }
+
+    _safeRebuildActions() {
+      if (this._destroyed || !this._actionsSection) return
+
+      try {
+        this._rebuildActions()
+      } catch (e) {
+        logError(e, "Error reconstruyendo acciones del menú")
+      }
     }
 
     _refreshAll() {
@@ -436,22 +457,6 @@ const ValetServicesIndicator = GObject.registerClass(
       return services.filter(
         (service) => this._getState(service) !== "not-found",
       )
-    }
-
-    _appendStartSteps(steps, services) {
-      const existing = this._existingServices(services)
-      if (existing.length) steps.push(this._systemctlCmd("start", ...existing))
-    }
-
-    _appendStopSteps(steps, services) {
-      const existing = this._existingServices(services)
-      if (existing.length) steps.push(this._systemctlCmd("stop", ...existing))
-    }
-
-    _appendRestartSteps(steps, services) {
-      const existing = this._existingServices(services)
-      if (existing.length)
-        steps.push(this._systemctlCmd("restart", ...existing))
     }
 
     _runSubprocess(argv) {
@@ -630,6 +635,11 @@ const ValetServicesIndicator = GObject.registerClass(
 
     destroy() {
       this._destroyed = true
+
+      if (this._menuOpenChangedId) {
+        this.menu.disconnect(this._menuOpenChangedId)
+        this._menuOpenChangedId = 0
+      }
 
       if (this._refreshSourceId) {
         GLib.Source.remove(this._refreshSourceId)

@@ -72,20 +72,6 @@ export default class ValetServicesPreferences extends ExtensionPreferences {
     dbFrame.set_size_request(-1, 80)
     dbGroup.add(dbFrame)
 
-    // --- Valet binary path ---
-    const pathGroup = new Adw.PreferencesGroup({
-      title: "Ruta de Valet",
-      description:
-        "Ruta completa al binario de valet. Se usa para start/stop del stack.",
-    })
-    page.add(pathGroup)
-
-    const pathRow = new Adw.EntryRow({
-      title: "Ruta al binario valet",
-      text: settings.get_string("valet-path"),
-    })
-    pathGroup.add(pathRow)
-
     // --- Save on close ---
     window.connect("close-request", () => {
       const parseBuf = (buf) => {
@@ -99,7 +85,6 @@ export default class ValetServicesPreferences extends ExtensionPreferences {
 
       settings.set_strv("valet-services", parseBuf(valetEntry.get_buffer()))
       settings.set_strv("db-services", parseBuf(dbEntry.get_buffer()))
-      settings.set_string("valet-path", pathRow.text.trim())
     })
   }
 }

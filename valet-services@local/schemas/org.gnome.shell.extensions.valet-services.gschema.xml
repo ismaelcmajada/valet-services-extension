@@ -15,11 +15,5 @@
       <description>Candidate database units. The first one found installed will be used.</description>
     </key>
 
-    <key name="valet-path" type="s">
-      <default>'/usr/local/bin/valet'</default>
-      <summary>Path to valet binary</summary>
-      <description>Full path to the valet command-line tool.</description>
-    </key>
-
   </schema>
 </schemalist>
