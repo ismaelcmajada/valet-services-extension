@@ -5,5 +5,5 @@
   "shell-version": ["45", "46", "47", "48", "49"],
   "settings-schema": "org.gnome.shell.extensions.valet-services",
   "version": 3,
-  "url": "https://example.invalid/valet-services"
+  "url": "https://github.com/ismaelcmajada/valet-services-extension"
 }
