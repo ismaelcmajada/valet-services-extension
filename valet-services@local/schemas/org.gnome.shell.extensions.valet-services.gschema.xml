@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.valet-services"
+          path="/org/gnome/shell/extensions/valet-services/">
+
+    <key name="valet-services" type="as">
+      <default>['nginx.service', 'dnsmasq.service', 'php-fpm.service']</default>
+      <summary>Valet stack services</summary>
+      <description>List of systemd unit names that form the Valet stack.</description>
+    </key>
+
+    <key name="db-services" type="as">
+      <default>['mariadb.service', 'mysqld.service']</default>
+      <summary>Database service candidates</summary>
+      <description>Candidate database units. The first one found installed will be used.</description>
+    </key>
+
+  </schema>
+</schemalist>

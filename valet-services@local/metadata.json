@@ -1,0 +1,9 @@
+{
+  "uuid": "valet-services@local",
+  "name": "Valet Services",
+  "description": "Minimal service monitor for Valet Linux and MySQL/MariaDB",
+  "shell-version": ["45", "46", "47", "48", "49"],
+  "settings-schema": "org.gnome.shell.extensions.valet-services",
+  "version": 2,
+  "url": "https://example.invalid/valet-services"
+}
