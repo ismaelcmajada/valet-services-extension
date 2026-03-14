@@ -58,6 +58,7 @@ class ServiceWatcher {
     this.serviceName = serviceName
     this._onChanged = onChanged
     this._activeState = "unknown"
+    this._enabledState = "unknown"
     this._subId = 0
     this._proxy = null
     this._objectPath = null
@@ -68,6 +69,10 @@ class ServiceWatcher {
 
   get activeState() {
     return this._activeState
+  }
+
+  get enabledState() {
+    return this._enabledState
   }
 
   destroy() {
@@ -153,13 +158,17 @@ class ServiceWatcher {
       const activeValue = this._proxy.get_cached_property("ActiveState")
 
       const loadState = loadValue ? loadValue.unpack() : "unknown"
+      const enabledValue = this._proxy.get_cached_property("UnitFileState")
 
       if (loadState === "not-found") {
         this._activeState = "not-found"
+        this._enabledState = "unknown"
       } else if (activeValue) {
         this._activeState = activeValue.unpack()
+        this._enabledState = enabledValue ? enabledValue.unpack() : "unknown"
       } else {
         this._activeState = "unknown"
+        this._enabledState = enabledValue ? enabledValue.unpack() : "unknown"
       }
     } catch (_e) {
       this._activeState = "unknown"
@@ -254,13 +263,12 @@ const ValetServicesIndicator = GObject.registerClass(
       this.menu.addMenuItem(this._summaryItem)
       this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem())
 
-      // Per-service status lines
+      // Per-service submenus
       this._serviceItems = new Map()
       for (const service of this._allWatched) {
-        const item = new PopupMenu.PopupMenuItem(`${displayName(service)}: …`, {
-          reactive: false,
-          can_focus: false,
-        })
+        const item = new PopupMenu.PopupSubMenuMenuItem(
+          `${displayName(service)}: …`,
+        )
         this._serviceItems.set(service, item)
         this.menu.addMenuItem(item)
       }
@@ -329,6 +337,27 @@ const ValetServicesIndicator = GObject.registerClass(
 
     _getState(service) {
       return this._watchers.get(service)?.activeState ?? "unknown"
+    }
+
+    _getEnabledState(service) {
+      return this._watchers.get(service)?.enabledState ?? "unknown"
+    }
+
+    _prettifyEnabledState(enabledState) {
+      switch (enabledState) {
+        case "enabled":
+          return "habilitado"
+        case "disabled":
+          return "deshabilitado"
+        case "static":
+          return "estático"
+        case "masked":
+          return "enmascarado"
+        case "indirect":
+          return "indirecto"
+        default:
+          return enabledState || "desconocido"
+      }
     }
 
     _resolveDbService() {
@@ -411,18 +440,24 @@ const ValetServicesIndicator = GObject.registerClass(
         )
       }
 
-      // Per-service lines
+      // Per-service submenus
       for (const service of this._allWatched) {
         const state = this._getState(service)
         const item = this._serviceItems.get(service)
         if (!item?.label) continue
 
-        if (state === "not-found")
+        const enabledState = this._getEnabledState(service)
+        const enabledText = this._prettifyEnabledState(enabledState)
+
+        if (state === "not-found") {
           item.label.set_text(`${displayName(service)}: no instalado`)
-        else
+        } else {
           item.label.set_text(
-            `${displayName(service)}: ${prettifyState(state)}`,
+            `${displayName(service)}: ${prettifyState(state)} · arranque: ${enabledText}`,
           )
+        }
+
+        this._rebuildServiceSubmenu(service)
       }
 
       // Rebuild action buttons to match current state
@@ -439,8 +474,114 @@ const ValetServicesIndicator = GObject.registerClass(
       }
     }
 
+    _rebuildServiceSubmenu(service) {
+      const item = this._serviceItems.get(service)
+      if (!item) return
+
+      item.menu.removeAll()
+
+      const state = this._getState(service)
+      const enabledState = this._getEnabledState(service)
+
+      if (state === "not-found") {
+        const info = new PopupMenu.PopupMenuItem("Servicio no instalado", {
+          reactive: false,
+          can_focus: false,
+        })
+        item.menu.addMenuItem(info)
+        return
+      }
+
+      if (["inactive", "failed", "unknown"].includes(state)) {
+        item.menu.addAction("Iniciar", () => this._startService(service))
+      }
+
+      if (["active", "activating", "deactivating"].includes(state)) {
+        item.menu.addAction("Parar", () => this._stopService(service))
+      }
+
+      if (["active", "partial"].includes(state)) {
+        item.menu.addAction("Reiniciar", () => this._restartService(service))
+      }
+
+      item.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem())
+
+      if (enabledState === "disabled" || enabledState === "unknown") {
+        item.menu.addAction("Habilitar al arranque", () =>
+          this._enableService(service),
+        )
+      } else if (enabledState === "enabled") {
+        item.menu.addAction("Deshabilitar del arranque", () =>
+          this._disableService(service),
+        )
+      } else {
+        const info = new PopupMenu.PopupMenuItem(
+          `Arranque: ${this._prettifyEnabledState(enabledState)}`,
+          { reactive: false, can_focus: false },
+        )
+        item.menu.addMenuItem(info)
+      }
+    }
+
     _refreshAll() {
       for (const watcher of this._watchers.values()) watcher.refresh()
+    }
+
+    // --- Individual service actions ---
+
+    async _startService(service) {
+      if (this._busy || this._getState(service) === "not-found") return
+      this.menu.close()
+
+      try {
+        await this._runSequence([this._systemctlCmd("start", service)])
+      } catch (e) {
+        logError(e, `Error arrancando ${service}`)
+      }
+    }
+
+    async _stopService(service) {
+      if (this._busy || this._getState(service) === "not-found") return
+      this.menu.close()
+
+      try {
+        await this._runSequence([this._systemctlCmd("stop", service)])
+      } catch (e) {
+        logError(e, `Error deteniendo ${service}`)
+      }
+    }
+
+    async _restartService(service) {
+      if (this._busy || this._getState(service) === "not-found") return
+      this.menu.close()
+
+      try {
+        await this._runSequence([this._systemctlCmd("restart", service)])
+      } catch (e) {
+        logError(e, `Error reiniciando ${service}`)
+      }
+    }
+
+    async _enableService(service) {
+      if (this._busy || this._getState(service) === "not-found") return
+      this.menu.close()
+
+      try {
+        await this._runSequence([this._systemctlCmd("enable", service)])
+      } catch (e) {
+        logError(e, `Error habilitando ${service}`)
+      }
+    }
+
+    async _disableService(service) {
+      if (this._busy || this._getState(service) === "not-found") return
+      this.menu.close()
+
+      try {
+        await this._runSequence([this._systemctlCmd("disable", service)])
+      } catch (e) {
+        logError(e, `Error deshabilitando ${service}`)
+      }
     }
 
     // --- Command helpers ---
