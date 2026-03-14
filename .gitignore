@@ -1,5 +1,6 @@
-# Compiled GSettings schemas
-valet-services@ismaelcmajada/schemas/gschemas.compiled
+# Generated files
+*.compiled
+*.zip
 
 # Editor / temporary files
 *~
