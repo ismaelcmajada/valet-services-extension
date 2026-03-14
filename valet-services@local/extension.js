@@ -21,7 +21,6 @@ const PRETTY_NAMES = {
   mariadb: "MariaDB",
   nginx: "Nginx",
   dnsmasq: "dnsmasq",
-  "valet-dns": "Valet DNS",
 }
 
 function normalizeUnitName(name) {
@@ -221,7 +220,6 @@ const ValetServicesIndicator = GObject.registerClass(
         ...new Set([
           ...this._valetServices,
           ...this._dbCandidates,
-          "valet-dns.service",
           "dnsmasq.service",
         ]),
       ]
@@ -329,20 +327,10 @@ const ValetServicesIndicator = GObject.registerClass(
       return null
     }
 
-    _resolveDnsServiceForStart() {
-      const candidates = ["valet-dns.service", "dnsmasq.service"]
-      for (const candidate of candidates) {
-        if (this._getState(candidate) !== "not-found") return candidate
-      }
-      return null
-    }
-
-    _resolveDnsServiceForRestore() {
-      const candidates = ["dnsmasq.service"]
-      for (const candidate of candidates) {
-        if (this._getState(candidate) !== "not-found") return candidate
-      }
-      return null
+    _resolveDnsService() {
+      return this._getState("dnsmasq.service") !== "not-found"
+        ? "dnsmasq.service"
+        : null
     }
 
     _valetStackState() {
@@ -431,10 +419,6 @@ const ValetServicesIndicator = GObject.registerClass(
 
     // --- Command helpers ---
 
-    _pkexecWarmupCmd() {
-      return ["/usr/bin/pkexec", "/usr/bin/true"]
-    }
-
     _systemctlCmd(action, ...services) {
       return ["/usr/bin/pkexec", "/usr/bin/systemctl", action, ...services]
     }
@@ -446,18 +430,19 @@ const ValetServicesIndicator = GObject.registerClass(
     }
 
     _appendStartSteps(steps, services) {
-      for (const service of this._existingServices(services))
-        steps.push(this._systemctlCmd("start", service))
+      const existing = this._existingServices(services)
+      if (existing.length) steps.push(this._systemctlCmd("start", ...existing))
     }
 
     _appendStopSteps(steps, services) {
-      for (const service of this._existingServices(services))
-        steps.push(this._systemctlCmd("stop", service))
+      const existing = this._existingServices(services)
+      if (existing.length) steps.push(this._systemctlCmd("stop", ...existing))
     }
 
     _appendRestartSteps(steps, services) {
-      for (const service of this._existingServices(services))
-        steps.push(this._systemctlCmd("restart", service))
+      const existing = this._existingServices(services)
+      if (existing.length)
+        steps.push(this._systemctlCmd("restart", ...existing))
     }
 
     _runSubprocess(argv) {
@@ -517,28 +502,18 @@ const ValetServicesIndicator = GObject.registerClass(
       this.menu.close()
 
       const dbService = this._resolveDbService()
-      const dnsStartService = this._resolveDnsServiceForStart()
-      const dnsRestoreService = this._resolveDnsServiceForRestore()
+      const dnsService = this._resolveDnsService()
       const steps = []
 
-      steps.push(this._pkexecWarmupCmd())
+      const toStart = []
 
-      // Si Valet usa valet-dns, evita dejar dnsmasq "normal" compitiendo
-      if (
-        dnsStartService &&
-        dnsRestoreService &&
-        dnsStartService !== dnsRestoreService &&
-        this._getState(dnsRestoreService) !== "not-found"
-      ) {
-        steps.push(this._systemctlCmd("stop", dnsRestoreService))
-      }
+      if (dbService) toStart.push(dbService)
 
-      if (dbService) steps.push(this._systemctlCmd("start", dbService))
+      if (dnsService) toStart.push(dnsService)
 
-      if (dnsStartService)
-        steps.push(this._systemctlCmd("start", dnsStartService))
+      toStart.push(...this._existingServices(this._valetServices))
 
-      this._appendStartSteps(steps, this._valetServices)
+      if (toStart.length) steps.push(this._systemctlCmd("start", ...toStart))
 
       try {
         await this._runSequence(steps)
@@ -552,29 +527,15 @@ const ValetServicesIndicator = GObject.registerClass(
       this.menu.close()
 
       const dbService = this._resolveDbService()
-      const dnsStartService = this._resolveDnsServiceForStart()
-      const dnsRestoreService = this._resolveDnsServiceForRestore()
       const steps = []
 
-      steps.push(this._pkexecWarmupCmd())
+      const toStop = []
 
-      // Primero servicios web de Valet
-      this._appendStopSteps(steps, this._valetServices)
+      toStop.push(...this._existingServices(this._valetServices))
 
-      // Luego DNS específico de Valet, si aplica
-      if (dnsStartService)
-        steps.push(this._systemctlCmd("stop", dnsStartService))
+      if (dbService) toStop.push(dbService)
 
-      // Restaurar dnsmasq clásico si es distinto
-      if (
-        dnsRestoreService &&
-        dnsRestoreService !== dnsStartService &&
-        this._getState(dnsRestoreService) !== "not-found"
-      ) {
-        steps.push(this._systemctlCmd("start", dnsRestoreService))
-      }
-
-      if (dbService) steps.push(this._systemctlCmd("stop", dbService))
+      if (toStop.length) steps.push(this._systemctlCmd("stop", ...toStop))
 
       try {
         await this._runSequence(steps)
@@ -588,44 +549,26 @@ const ValetServicesIndicator = GObject.registerClass(
       this.menu.close()
 
       const dbService = this._resolveDbService()
-      const dnsStartService = this._resolveDnsServiceForStart()
-      const dnsRestoreService = this._resolveDnsServiceForRestore()
+      const dnsService = this._resolveDnsService()
       const steps = []
 
-      steps.push(this._pkexecWarmupCmd())
+      const toStop = []
 
-      // Parada
-      this._appendStopSteps(steps, this._valetServices)
+      toStop.push(...this._existingServices(this._valetServices))
 
-      if (dnsStartService)
-        steps.push(this._systemctlCmd("stop", dnsStartService))
+      if (dbService) toStop.push(dbService)
 
-      if (
-        dnsRestoreService &&
-        dnsRestoreService !== dnsStartService &&
-        this._getState(dnsRestoreService) !== "not-found"
-      ) {
-        steps.push(this._systemctlCmd("start", dnsRestoreService))
-      }
+      if (toStop.length) steps.push(this._systemctlCmd("stop", ...toStop))
 
-      if (dbService) steps.push(this._systemctlCmd("stop", dbService))
+      const toStart = []
 
-      // Arranque
-      if (
-        dnsStartService &&
-        dnsRestoreService &&
-        dnsStartService !== dnsRestoreService &&
-        this._getState(dnsRestoreService) !== "not-found"
-      ) {
-        steps.push(this._systemctlCmd("stop", dnsRestoreService))
-      }
+      if (dbService) toStart.push(dbService)
 
-      if (dbService) steps.push(this._systemctlCmd("start", dbService))
+      if (dnsService) toStart.push(dnsService)
 
-      if (dnsStartService)
-        steps.push(this._systemctlCmd("start", dnsStartService))
+      toStart.push(...this._existingServices(this._valetServices))
 
-      this._appendStartSteps(steps, this._valetServices)
+      if (toStart.length) steps.push(this._systemctlCmd("start", ...toStart))
 
       try {
         await this._runSequence(steps)
@@ -644,10 +587,7 @@ const ValetServicesIndicator = GObject.registerClass(
       if (!dbService) return
 
       try {
-        await this._runSequence([
-          this._pkexecWarmupCmd(),
-          this._systemctlCmd("start", dbService),
-        ])
+        await this._runSequence([this._systemctlCmd("start", dbService)])
       } catch (e) {
         logError(e, "Error arrancando la base de datos")
       }
@@ -661,10 +601,7 @@ const ValetServicesIndicator = GObject.registerClass(
       if (!dbService) return
 
       try {
-        await this._runSequence([
-          this._pkexecWarmupCmd(),
-          this._systemctlCmd("stop", dbService),
-        ])
+        await this._runSequence([this._systemctlCmd("stop", dbService)])
       } catch (e) {
         logError(e, "Error deteniendo la base de datos")
       }
@@ -678,10 +615,7 @@ const ValetServicesIndicator = GObject.registerClass(
       if (!dbService) return
 
       try {
-        await this._runSequence([
-          this._pkexecWarmupCmd(),
-          this._systemctlCmd("restart", dbService),
-        ])
+        await this._runSequence([this._systemctlCmd("restart", dbService)])
       } catch (e) {
         logError(e, "Error reiniciando la base de datos")
       }
