@@ -210,11 +210,23 @@ const ValetServicesIndicator = GObject.registerClass(
       this._destroyed = false
       this._refreshSourceId = 0
 
-      this._label = new St.Label({
+      this._box = new St.BoxLayout({
         y_align: Clutter.ActorAlign.CENTER,
       })
-      this._label.clutter_text.use_markup = true
-      this.add_child(this._label)
+
+      this._valetLabel = new St.Label({
+        y_align: Clutter.ActorAlign.CENTER,
+      })
+      this._dbLabel = new St.Label({
+        y_align: Clutter.ActorAlign.CENTER,
+      })
+
+      this._valetLabel.clutter_text.use_markup = true
+      this._dbLabel.clutter_text.use_markup = true
+
+      this._box.add_child(this._valetLabel)
+      this._box.add_child(this._dbLabel)
+      this.add_child(this._box)
 
       this._settingsChangedId = this._settings.connect("changed", () => {
         this._rebuildAll()
@@ -471,12 +483,11 @@ const ValetServicesIndicator = GObject.registerClass(
         valetState === "active" ? "●" : valetState === "partial" ? "◐" : "○"
       const dDot = dbState === "active" ? "●" : "○"
 
-      if (this._label?.clutter_text) {
-        this._label.clutter_text.set_markup(
-          `<span foreground="${vColor}">V${vDot}</span> ` +
-            `<span foreground="${dColor}">DB${dDot}</span>`,
-        )
-      }
+      this._valetLabel.set_text(`V${vDot}`)
+      this._dbLabel.set_text(` DB${dDot}`)
+
+      this._valetLabel.set_style(`color: ${vColor};`)
+      this._dbLabel.set_style(`color: ${dColor};`)
 
       // Summary line
       const valetWord =
