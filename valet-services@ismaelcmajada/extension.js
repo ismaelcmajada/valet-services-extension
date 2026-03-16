@@ -12,7 +12,7 @@ import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js"
 // --- Colors for Pango markup on the panel label ---
 const COLOR_GREEN = "#73d216"
 const COLOR_YELLOW = "#f4a01b"
-const COLOR_RED = "#cc0000"
+const COLOR = "#ffffff"
 
 // --- Pretty names for known services ---
 const PRETTY_NAMES = {
@@ -432,6 +432,8 @@ const ValetServicesIndicator = GObject.registerClass(
       if (states.length === 0) return "unknown"
       if (states.every((s) => s === "active")) return "active"
       if (states.some((s) => s === "failed")) return "failed"
+      if (states.some((s) => s === "activating")) return "activating"
+      if (states.some((s) => s === "deactivating")) return "deactivating"
       if (states.some((s) => s === "active")) return "partial"
       return "inactive"
     }
@@ -453,15 +455,17 @@ const ValetServicesIndicator = GObject.registerClass(
       const vColor =
         valetState === "active"
           ? COLOR_GREEN
-          : valetState === "partial"
+          : valetState === "partial" ||
+              valetState === "activating" ||
+              valetState === "deactivating"
             ? COLOR_YELLOW
-            : COLOR_RED
+            : COLOR
       const dColor =
         dbState === "active"
           ? COLOR_GREEN
           : dbState === "activating" || dbState === "deactivating"
             ? COLOR_YELLOW
-            : COLOR_RED
+            : COLOR
 
       const vDot =
         valetState === "active" ? "●" : valetState === "partial" ? "◐" : "○"
@@ -469,7 +473,8 @@ const ValetServicesIndicator = GObject.registerClass(
 
       if (this._label?.clutter_text) {
         this._label.clutter_text.set_markup(
-          `<span color="${vColor}">V${vDot}</span> <span color="${dColor}">DB${dDot}</span>`,
+          `<span foreground="${vColor}">V${vDot}</span> ` +
+            `<span foreground="${dColor}">DB${dDot}</span>`,
         )
       }
 
