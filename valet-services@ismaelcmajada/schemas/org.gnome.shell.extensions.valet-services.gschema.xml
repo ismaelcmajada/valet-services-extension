@@ -15,6 +15,18 @@
       <description>Candidate database units. The first one found installed will be used.</description>
     </key>
 
+    <key name="hook-services" type="as">
+      <default>[]</default>
+      <summary>Servicios con hooks</summary>
+      <description>Servicios a los que se aplican los overrides de systemd (ExecStartPre, etc.).</description>
+    </key>
+
+    <key name="applied-hook-services" type="as">
+      <default>[]</default>
+      <summary>Servicios con overrides aplicados</summary>
+      <description>Lista interna de servicios que tenían overrides en la última ejecución. Se usa para limpiar drop-ins obsoletos.</description>
+    </key>
+
     <key name="pre-start-commands" type="as">
       <default>[]</default>
       <summary>Comandos previos al arranque</summary>

@@ -1,4 +1,6 @@
 import Adw from "gi://Adw"
+import Gio from "gi://Gio"
+import GLib from "gi://GLib"
 import Gtk from "gi://Gtk"
 
 import { ExtensionPreferences } from "resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js"
@@ -126,10 +128,127 @@ export default class ValetServicesPreferences extends ExtensionPreferences {
     )
     postStopGroup.add(postStopFrame)
 
-    // --- Save on close ---
-    window.connect("close-request", () => {
+    // --- Hook service selector (dynamic) ---
+    const hookSelectorGroup = new Adw.PreferencesGroup({
+      title: "Servicios con hooks",
+      description:
+        "Selecciona a qué servicios se aplican los overrides de systemd.",
+    })
+    page.add(hookSelectorGroup)
+
+    let checkRows = new Map()
+    let hookRows = []
+
+    const rebuildHookSelector = () => {
+      // Remove old rows
+      for (const row of hookRows) hookSelectorGroup.remove(row)
+      hookRows = []
+      checkRows.clear()
+
+      // Build service list from current buffer contents
+      const valetList = parseBuf(valetEntry.get_buffer())
+      const dbList = parseBuf(dbEntry.get_buffer())
+      const allServices = [...new Set([...valetList, ...dbList])].filter(
+        (s) => s.length > 0,
+      )
+
+      const currentHookServices = new Set(settings.get_strv("hook-services"))
+
+      for (const service of allServices) {
+        const check = new Gtk.CheckButton({
+          active: currentHookServices.has(service),
+        })
+        const row = new Adw.ActionRow({ title: service })
+        row.add_prefix(check)
+        row.activatable_widget = check
+        hookSelectorGroup.add(row)
+        hookRows.push(row)
+        checkRows.set(service, check)
+      }
+    }
+
+    rebuildHookSelector()
+
+    // Regenerate checkboxes when service buffers change
+    valetEntry.get_buffer().connect("changed", () => rebuildHookSelector())
+    dbEntry.get_buffer().connect("changed", () => rebuildHookSelector())
+
+    // --- Apply overrides button ---
+    const applyGroup = new Adw.PreferencesGroup()
+    page.add(applyGroup)
+
+    const statusLabel = new Gtk.Label({
+      label: "",
+      wrap: true,
+      xalign: 0,
+      margin_start: 12,
+      margin_end: 12,
+    })
+
+    const applyButton = new Gtk.Button({
+      label: "Aplicar overrides",
+      css_classes: ["suggested-action"],
+      margin_start: 12,
+      margin_end: 12,
+      margin_top: 4,
+      margin_bottom: 4,
+    })
+
+    applyButton.connect("clicked", () => {
+      saveAll()
+
+      statusLabel.set_text("Aplicando overrides…")
+      applyButton.sensitive = false
+
+      const scriptPath = GLib.build_filenamev([this.path, "apply-hooks.sh"])
+
+      try {
+        const proc = Gio.Subprocess.new(
+          ["/usr/bin/bash", scriptPath],
+          Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+        )
+
+        proc.communicate_utf8_async(null, null, (obj, res) => {
+          try {
+            const [, stdout, stderr] = obj.communicate_utf8_finish(res)
+            const out = stdout.trim()
+            const err = stderr.trim()
+
+            if (obj.get_successful()) {
+              const parts = [out || "Overrides aplicados correctamente."]
+              if (err) parts.push(`Avisos: ${err}`)
+              statusLabel.set_text(parts.join("\n"))
+            } else {
+              statusLabel.set_text(
+                `Error: ${err || out || "fallo desconocido"}`,
+              )
+            }
+          } catch (e) {
+            statusLabel.set_text(`Error: ${e.message}`)
+          }
+
+          applyButton.sensitive = true
+        })
+      } catch (e) {
+        statusLabel.set_text(`Error lanzando script: ${e.message}`)
+        applyButton.sensitive = true
+      }
+    })
+
+    applyGroup.add(applyButton)
+    applyGroup.add(statusLabel)
+
+    // --- Save helper ---
+    const saveAll = () => {
       settings.set_strv("valet-services", parseBuf(valetEntry.get_buffer()))
       settings.set_strv("db-services", parseBuf(dbEntry.get_buffer()))
+
+      const selectedHooks = []
+      for (const [service, check] of checkRows) {
+        if (check.active) selectedHooks.push(service)
+      }
+      settings.set_strv("hook-services", selectedHooks)
+
       settings.set_strv(
         "pre-start-commands",
         parseBuf(preStartEntry.get_buffer()),
@@ -146,6 +265,11 @@ export default class ValetServicesPreferences extends ExtensionPreferences {
         "post-stop-commands",
         parseBuf(postStopEntry.get_buffer()),
       )
+    }
+
+    // --- Save on close ---
+    window.connect("close-request", () => {
+      saveAll()
     })
   }
 }
