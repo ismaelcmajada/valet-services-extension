@@ -15,5 +15,29 @@
       <description>Candidate database units. The first one found installed will be used.</description>
     </key>
 
+    <key name="pre-start-commands" type="as">
+      <default>[]</default>
+      <summary>Comandos previos al arranque</summary>
+      <description>Comandos para ExecStartPre.</description>
+    </key>
+
+    <key name="post-start-commands" type="as">
+      <default>[]</default>
+      <summary>Comandos posteriores al arranque</summary>
+      <description>Comandos para ExecStartPost.</description>
+    </key>
+
+    <key name="pre-stop-commands" type="as">
+      <default>[]</default>
+      <summary>Comandos previos a la parada</summary>
+      <description>Comandos para ExecStopPre.</description>
+    </key>
+
+    <key name="post-stop-commands" type="as">
+      <default>[]</default>
+      <summary>Comandos posteriores a la parada</summary>
+      <description>Comandos para ExecStopPost.</description>
+    </key>
+
   </schema>
 </schemalist>
