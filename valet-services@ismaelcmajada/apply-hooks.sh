@@ -6,14 +6,24 @@ if [[ $EUID -eq 0 ]]; then
   exit 1
 fi
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export GSETTINGS_SCHEMA_DIR="${SCRIPT_DIR}/schemas"
+
 SCHEMA="org.gnome.shell.extensions.valet-services"
 
 # --- Parse GSettings strv into bash array ---
 read_strv() {
   local key="$1"
-  gsettings get "$SCHEMA" "$key" \
-    | sed "s/^\[//; s/\]$//; s/', '/"$'\n'"'/g; s/^'//; s/'$//" \
-    | sed '/^$/d'
+  gsettings get "$SCHEMA" "$key" | python3 -c '
+import sys, ast
+s = sys.stdin.read().strip()
+if s.startswith("@as "):
+    s = s[4:]
+if s == "[]":
+    sys.exit(0)
+for item in ast.literal_eval(s):
+    print(item)
+'
 }
 
 readarray -t SERVICES < <(read_strv "hook-services")
@@ -55,8 +65,8 @@ for prev in "${PREV_SERVICES[@]}"; do
     dir="/etc/systemd/system/${prev}.d"
     file="${dir}/10-valet-hooks.conf"
     if [[ -f "$file" ]]; then
-      sudo rm -f "$file"
-      sudo rmdir --ignore-fail-on-non-empty "$dir" 2>/dev/null || true
+      pkexec rm -f "$file"
+      pkexec rmdir --ignore-fail-on-non-empty "$dir" 2>/dev/null || true
       echo "🗑 ${prev} → eliminado (ya no seleccionado)"
     fi
   fi
@@ -74,8 +84,8 @@ for service in "${SERVICES[@]}"; do
 
   if [[ "$has_hooks" == false ]]; then
     if [[ -f "$file" ]]; then
-      sudo rm -f "$file"
-      sudo rmdir --ignore-fail-on-non-empty "$dir" 2>/dev/null || true
+      pkexec rm -f "$file"
+      pkexec rmdir --ignore-fail-on-non-empty "$dir" 2>/dev/null || true
       echo "🗑 ${service} → eliminado (sin hooks)"
     else
       echo "— ${service} → sin override previo"
@@ -83,8 +93,9 @@ for service in "${SERVICES[@]}"; do
     continue
   fi
 
-  sudo mkdir -p "$dir"
+  pkexec mkdir -p "$dir"
 
+  tmpfile=$(mktemp)
   {
     echo "[Service]"
     echo "ExecStartPre="
@@ -107,7 +118,10 @@ for service in "${SERVICES[@]}"; do
     for cmd in "${POST_STOP[@]}"; do
       printf "ExecStopPost=/usr/bin/bash -lc '%s'\n" "$(escape_single "$cmd")"
     done
-  } | sudo tee "$file" > /dev/null
+  } > "$tmpfile"
+
+  pkexec cp "$tmpfile" "$file"
+  rm -f "$tmpfile"
 
   applied+=("$service")
   echo "✔ ${service} → ${file}"
@@ -125,6 +139,6 @@ else
   gsettings set "$SCHEMA" applied-hook-services "[$list]"
 fi
 
-sudo systemctl daemon-reload
+pkexec systemctl daemon-reload
 echo
 echo "Overrides aplicados y daemon-reload ejecutado."
