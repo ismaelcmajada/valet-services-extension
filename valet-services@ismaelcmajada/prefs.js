@@ -140,7 +140,12 @@ export default class ValetServicesPreferences extends ExtensionPreferences {
     let hookRows = []
 
     const rebuildHookSelector = () => {
-      // Remove old rows
+      // Capture current UI selection before destroying rows
+      const previousSelection = new Set()
+      for (const [service, check] of checkRows) {
+        if (check.active) previousSelection.add(service)
+      }
+
       for (const row of hookRows) hookSelectorGroup.remove(row)
       hookRows = []
       checkRows.clear()
@@ -152,12 +157,13 @@ export default class ValetServicesPreferences extends ExtensionPreferences {
         (s) => s.length > 0,
       )
 
-      const currentHookServices = new Set(settings.get_strv("hook-services"))
+      const savedHookServices = new Set(settings.get_strv("hook-services"))
 
       for (const service of allServices) {
-        const check = new Gtk.CheckButton({
-          active: currentHookServices.has(service),
-        })
+        const active =
+          previousSelection.has(service) || savedHookServices.has(service)
+
+        const check = new Gtk.CheckButton({ active })
         const row = new Adw.ActionRow({ title: service })
         row.add_prefix(check)
         row.activatable_widget = check
