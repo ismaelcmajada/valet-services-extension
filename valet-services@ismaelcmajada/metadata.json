@@ -2,8 +2,8 @@
   "uuid": "valet-services@ismaelcmajada",
   "name": "Valet Services",
   "description": "Minimal service monitor for Valet Linux and MySQL/MariaDB",
-  "shell-version": ["45", "46", "47", "48", "49"],
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
   "settings-schema": "org.gnome.shell.extensions.valet-services",
-  "version": 3,
+  "version": 4,
   "url": "https://github.com/ismaelcmajada/valet-services-extension"
 }
